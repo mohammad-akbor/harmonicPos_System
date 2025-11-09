@@ -33,10 +33,41 @@ async function writeDB(db){
 function createWindow() {
   const win = new BrowserWindow({
     width: 1400, height: 900,
-    webPreferences: { nodeIntegration: true, contextIsolation: false }
+    webPreferences: { 
+      nodeIntegration: true, 
+      contextIsolation: false,
+      enableRemoteModule: true
+    },
+    show: false  // Don't show until ready
   });
-  win.loadFile('index.html');
-  // win.webContents.openDevTools();
+
+  // Handle window ready-to-show
+  win.once('ready-to-show', () => {
+    win.show();
+  });
+
+  // Handle load errors
+  win.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
+    console.error('Failed to load:', errorDescription);
+    const options = {
+      type: 'error',
+      buttons: ['Retry', 'Close'],
+      title: 'Application Error',
+      message: 'Failed to load application',
+      detail: `Error: ${errorDescription}`
+    };
+    dialog.showMessageBox(win, options).then(({response}) => {
+      if (response === 0) {
+        win.reload();
+      } else {
+        app.quit();
+      }
+    });
+  });
+
+  win.loadFile('index.html').catch(err => {
+    console.error('Failed to load index.html:', err);
+  });
 }
 
 app.whenReady().then(async () => { await ensureData(); createWindow(); });
