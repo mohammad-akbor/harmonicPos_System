@@ -2,6 +2,9 @@
 
 A point of sale system for salon management with staff commission tracking.
 
+## Latest Release
+Download the latest macOS installer from: [Harmonic Salon POS-1.0.0.dmg](https://github.com/mohammad-akbor/harmonicPos_System/releases/latest)
+
 ## Features
 
 - Staff Management
