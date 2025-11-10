@@ -118,7 +118,8 @@ function addOrUpdateUser(){
 let editingStaff = null;
 function clearStaffForm() {
   document.getElementById('s_name').value = '';
-  document.getElementById('s_section').value = '';
+  // clear section checkboxes
+  const secs = document.querySelectorAll('input[name="s_section"]'); if(secs) secs.forEach(c=>c.checked = false);
   const sp = document.getElementById('s_percent'); if(sp) sp.value = '';
   const phoneEl = document.getElementById('s_phone'); if(phoneEl) phoneEl.value = '';
   editingStaff = null;
@@ -135,36 +136,32 @@ function clearProductForm() {
 
 
 
-const PRODUCT_STAFF_PERCENT = 0.5; // 0.5% commission on product sales
+const PRODUCT_STAFF_PERCENT = 5; // default 5% commission on product sales
 const SERVICE_STAFF_PERCENT = 40; // 40% commission on service sales
 
 function onStaffAddOrUpdate(){
-  const name = document.getElementById('s_name').value.trim();
-  const section = document.getElementById('s_section').value.trim();
+  const rawName = document.getElementById('s_name').value.trim();
   const percent = parseFloat(document.getElementById('s_percent')?.value) || 0;
-  if(!name) return alert('Enter staff name');
-  if(!section) return alert('Select section');
-  if(!['MANICURE', 'PEDICURE', 'BARBER'].includes(section.toUpperCase())) {
-    return alert('Section must be MANICURE, PEDICURE, or BARBER');
-  }
+  // collect selected sections (allow multiple)
+  const selected = Array.from(document.querySelectorAll('input[name="s_section"]:checked')).map(x=>x.value.toUpperCase());
+  if(!rawName) return alert('Enter staff name');
+  if(!selected || selected.length === 0) return alert('Select at least one section');
+  // If editing, update single staff
   if(editingStaff){
     const s = DB.staff.find(x=>x.id===editingStaff);
     if(!s) return;
-    s.name = name;
-    s.section = section.toUpperCase();
+    s.name = rawName;
+    s.section = selected; // store as array of sections
     s.percent = percent;
     alert('Staff updated');
   } else {
-    DB.staff.push({ 
-      id: genId('STF'), 
-      name, 
-      section: section.toUpperCase(), 
-      percent: percent,
-      daily: 0, 
-      monthly: 0, 
-      yearly: 0 
+    // Support adding multiple staff at once: split by newline or comma
+    const parts = rawName.split(/[\r\n,]+/).map(x=>x.trim()).filter(x=>x.length>0);
+    if(parts.length === 0) return alert('No valid staff names provided');
+    parts.forEach(n => {
+      DB.staff.push({ id: genId('STF'), name: n, section: selected.slice(), percent: percent, daily:0, monthly:0, yearly:0 });
     });
-    alert('Staff added');
+    alert(parts.length === 1 ? 'Staff added' : `${parts.length} staff added`);
   }
   saveDB(); 
   renderAll(); 
@@ -174,7 +171,9 @@ function editStaff(id){
   const s = DB.staff.find(x=>x.id===id);
   if(!s) return;
   document.getElementById('s_name').value = s.name;
-  document.getElementById('s_section').value = s.section;
+  // set section checkboxes (s.section may be array or string)
+  const secs = Array.isArray(s.section) ? s.section.map(x=>x.toUpperCase()) : [(s.section||'').toUpperCase()];
+  document.querySelectorAll('input[name="s_section"]').forEach(cb => { cb.checked = secs.includes(cb.value.toUpperCase()); });
   document.getElementById('s_percent').value = (s.percent || '');
   editingStaff = id;
 }
@@ -188,20 +187,38 @@ function deleteStaff(id){
 let editingProduct = null;
 function clearProductForm(){ document.getElementById('p_name').value=''; document.getElementById('p_price').value=''; document.getElementById('p_stock').value=''; editingProduct=null; }
 function onProductAddOrUpdate(){
-  const name = document.getElementById('p_name').value.trim();
+  const rawName = document.getElementById('p_name').value.trim();
   const price = parseFloat(document.getElementById('p_price').value) || 0;
   const stock = parseInt(document.getElementById('p_stock').value) || 0;
-  if(!name) return alert('Enter product name');
+  if(!rawName) return alert('Enter product name');
   if(price <= 0) return alert('Price must be greater than 0');
   if(stock < 0) return alert('Stock cannot be negative');
   if(editingProduct){
     const p = DB.products.find(x=>x.id===editingProduct);
     if(!p) return;
-    p.name=name; p.price=price; p.stock=stock;
+    p.name=rawName; p.price=price; p.stock=stock;
     alert('Product updated');
   } else {
-    DB.products.push({ id: genId('PRD'), name, price, stock });
-    alert('Product added');
+    // Support multiple product lines (newline separated). Each line can be:
+    // name | price | stock  OR just name (uses form price/stock)
+    const lines = rawName.split(/[\r\n]+/).map(l=>l.trim()).filter(l=>l.length>0);
+    const added = [];
+    lines.forEach(line => {
+      let name = line;
+      let pPrice = price;
+      let pStock = stock;
+      if(line.includes('|')){
+        const parts = line.split('|').map(x=>x.trim());
+        name = parts[0] || '';
+        pPrice = parseFloat(parts[1]) || price;
+        pStock = parseInt(parts[2]) || stock;
+      }
+      if(name) {
+        DB.products.push({ id: genId('PRD'), name, price: pPrice, stock: pStock });
+        added.push(name);
+      }
+    });
+    alert(added.length === 0 ? 'No valid products to add' : (added.length === 1 ? 'Product added' : `${added.length} products added`));
   }
   saveDB(); renderAll(); clearProductForm();
 }
@@ -223,23 +240,28 @@ function clearSellForm(){
   document.getElementById('sell_qty').value = '1';
   document.getElementById('sell_staff').value = '';
   document.getElementById('sell_payment').value = 'Cash';
+  const up = document.getElementById('sell_unit_price'); if(up) up.value = '';
   document.getElementById('sell_price').value = '';
 }
 function updateSellPrice() {
   const pid = document.getElementById('sell_product').value;
   const qty = parseInt(document.getElementById('sell_qty').value) || 1;
+  const unitField = document.getElementById('sell_unit_price');
   const priceField = document.getElementById('sell_price');
-  
+  let unitPrice = 0;
   if (pid) {
     const product = DB.products.find(x => x.id === pid);
-    if (product) {
-      priceField.value = (product.price * qty).toFixed(2);
-    } else {
-      priceField.value = '';
-    }
-  } else {
-    priceField.value = '';
+    if (product) unitPrice = Number(product.price) || 0;
   }
+  // if unit price is provided in the form, use it
+  if (unitField && unitField.value !== '') {
+    unitPrice = parseFloat(unitField.value) || 0;
+  } else if (unitField) {
+    // prefill unitField with product price when product selected
+    if (pid) unitField.value = unitPrice.toFixed(2);
+  }
+  const total = unitPrice * qty;
+  priceField.value = isFinite(total) ? total.toFixed(2) : '';
 }
 
 function sellProduct(){
@@ -251,15 +273,21 @@ function sellProduct(){
   const p = DB.products.find(x=>x.id===pid);
   if(!p) return alert('Product not found');
   if(p.stock < qty) return alert('Not enough stock');
+  // determine unit price: prefer unit override from form
+  const unitInput = document.getElementById('sell_unit_price');
+  let unitPrice = p.price;
+  if(unitInput && unitInput.value !== '') unitPrice = parseFloat(unitInput.value) || p.price;
+  const total = unitPrice * qty;
+  if(p.stock < qty) return alert('Not enough stock');
   p.stock -= qty;
   let staffName = '', staffEarn = 0;
-  const total = p.price * qty;
   if(staffID){
     const s = DB.staff.find(x=>x.id===staffID);
     if(s){
       staffName = s.name;
-      // Fixed 0.5% commission for product sales
-      staffEarn = total * (0.5 / 100);
+      // Use staff-specific percent if configured (>0), otherwise default PRODUCT_STAFF_PERCENT
+      const percent = (parseFloat(s.percent) > 0) ? parseFloat(s.percent) : PRODUCT_STAFF_PERCENT;
+      staffEarn = total * (percent / 100);
       s.daily = (s.daily || 0) + staffEarn;
       s.monthly = (s.monthly || 0) + staffEarn;
       s.yearly = (s.yearly || 0) + staffEarn;
@@ -271,7 +299,7 @@ function sellProduct(){
   saveDB(); clearSellForm(); renderAll();
 }
 
-// Sell a service (e.g., MANICURE, PEDICURE, BARBER)
+// Sell a service (e.g., MANICURE, BARBER)
 // Default staff share for services is 40% (staff gets 40% of service price).
 function sellService(serviceName, section, price, staffID, payment){
   if(!serviceName) return alert('Provide service name');
@@ -326,21 +354,39 @@ function paySalary(){
 function clearServiceForm(){
   const el = document.getElementById('service_name'); if(el) el.value='';
   const sec = document.getElementById('service_section'); if(sec) sec.value='MANICURE';
-  const pr = document.getElementById('service_price'); if(pr) pr.value='100';
+  const pr = document.getElementById('service_price'); if(pr) pr.value='0';
   const st = document.getElementById('service_staff'); if(st) st.value='';
   const pay = document.getElementById('service_payment'); if(pay) pay.value='Cash';
 }
 
 function sellServiceUI(){
-  const name = document.getElementById('service_name').value.trim();
+  const rawName = document.getElementById('service_name').value.trim();
   const section = document.getElementById('service_section').value;
   const price = parseFloat(document.getElementById('service_price').value) || 0;
   const staffID = document.getElementById('service_staff').value;
   const payment = document.getElementById('service_payment').value;
-  if(!name) return alert('Enter service name');
-  sellService(name, section, price, staffID, payment);
+  if(!rawName) return alert('Enter service name');
+  // Support multiple service names separated by newline or comma
+  const parts = rawName.split(/[\r\n,]+/).map(x=>x.trim()).filter(x=>x.length>0);
+  let count = 0;
+  parts.forEach(name => {
+    // If a staff is selected, ensure their section matches the service section
+    if(staffID){
+      const s = DB.staff.find(x=>x.id===staffID);
+      if(s && s.section){
+        const secs = Array.isArray(s.section) ? s.section.map(x=>x.toUpperCase()) : [(s.section||'').toUpperCase()];
+        if(!secs.includes((section||'').toUpperCase())){
+          alert(`Selected staff (${s.name}) cannot perform service in section ${section}.`);
+          return; // skip this item
+        }
+      }
+    }
+    sellService(name, section, price, staffID, payment);
+    count++;
+  });
   clearServiceForm();
   renderAll();
+  alert(count === 1 ? 'Service recorded' : `${count} services recorded`);
 }
 
 // ---------------- REPORTS ----------------
@@ -390,6 +436,37 @@ async function printMonthlyStaffCommission(){
   await exportCurrentReportPDF();
 }
 
+// Print/save a detailed monthly salon profit report (full month breakdown)
+async function printFullMonthlySalonProfit(){
+  const now = new Date();
+  const monthlyTx = DB.transactions.filter(t=>{ const d = new Date(t.date); return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear(); });
+  if(!monthlyTx.length) return alert('No transactions for this month');
+
+  const totalRevenue = monthlyTx.reduce((acc,t)=>acc + (t.total||0), 0);
+  const totalStaff = monthlyTx.reduce((acc,t)=>acc + (t.staffEarn||0), 0);
+  const totalSalon = monthlyTx.reduce((acc,t)=>acc + (t.salonEarn||0), 0);
+
+  let lines = [];
+  lines.push('Monthly Salon Profit Report (Detailed)');
+  lines.push(`Month: ${now.getMonth()+1}/${now.getFullYear()}`);
+  lines.push('');
+  lines.push(`Total Revenue: ${totalRevenue.toFixed(2)}`);
+  lines.push(`Total Staff Earn: ${totalStaff.toFixed(2)}`);
+  lines.push(`Total Salon Earn: ${totalSalon.toFixed(2)}`);
+  lines.push('');
+  lines.push('Transactions:');
+  lines.push('ID | Date | Item | Qty | Total | Staff | StaffEarn | SalonEarn | Payment');
+  monthlyTx.forEach(t=>{
+    const date = new Date(t.date).toLocaleString();
+    lines.push(`${t.id} | ${date} | ${t.productName} | ${t.qty} | ${ (t.total||0).toFixed(2) } | ${t.staffName||''} | ${ (t.staffEarn||0).toFixed(2) } | ${ (t.salonEarn||0).toFixed(2) } | ${t.payment||''}`);
+  });
+
+  const content = lines.join('\n');
+  const filename = `salon_full_month_profit_${now.getFullYear()}_${String(now.getMonth()+1).padStart(2,'0')}.txt`;
+  const res = await ipcRenderer.invoke('save-file', { filename, content });
+  if(res.ok) alert('Full monthly profit saved: ' + res.filePath);
+}
+
 // ---------------- PDF / CSV via main ----------------
 async function exportCurrentReportPDF(){
   // simple client side text -> ask user to Save via main process
@@ -428,7 +505,7 @@ function renderAll(){
   // staff list
   const st = document.getElementById('staffTable');
   st.innerHTML = DB.staff.length ? '<table><thead><tr><th>ID</th><th>Name</th><th>Section</th><th>%</th><th>Daily</th><th>Monthly</th><th>Yearly</th><th>Actions</th></tr></thead><tbody>' +
-    DB.staff.map(s=>`<tr><td>${s.id}</td><td>${s.name}</td><td>${s.section}</td><td>${(s.percent||'')}</td><td>${(s.daily||0).toFixed(2)}</td><td>${(s.monthly||0).toFixed(2)}</td><td>${(s.yearly||0).toFixed(2)}</td><td><button onclick="editStaff('${s.id}')">Edit</button> <button onclick="deleteStaff('${s.id}')">Remove</button></td></tr>`).join('') +
+    DB.staff.map(s=>`<tr><td>${s.id}</td><td>${s.name}</td><td>${Array.isArray(s.section)?s.section.join(', '):s.section}</td><td>${(s.percent||'')}</td><td>${(s.daily||0).toFixed(2)}</td><td>${(s.monthly||0).toFixed(2)}</td><td>${(s.yearly||0).toFixed(2)}</td><td><button onclick="editStaff('${s.id}')">Edit</button> <button onclick="deleteStaff('${s.id}')">Remove</button></td></tr>`).join('') +
     '</tbody></table>' : '<small>No staff</small>';
 
   // products

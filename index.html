@@ -55,7 +55,11 @@
       <div class="card">
         <h3>Staff</h3>
         <div><input id="s_name" placeholder="name"></div>
-        <div><input id="s_section" placeholder="section"></div>
+        <div>
+          <label style="display:block;margin-bottom:6px">Section (choose one or more):</label>
+          <label><input type="checkbox" name="s_section" value="MANICURE"> MANICURE</label>
+          <label style="margin-left:8px"><input type="checkbox" name="s_section" value="BARBER"> BARBER</label>
+        </div>
         <div><input id="s_percent" placeholder="commission %" type="number"></div>
         <div class="row" style="margin-top:8px">
           <button onclick="onStaffAddOrUpdate()">Add / Update Staff</button>
@@ -87,7 +91,7 @@
             <option value="BARBER">BARBER</option>
           </select>
         </div>
-        <div><input id="service_price" placeholder="price" type="number" step="0.01" value="100"></div>
+  <div><input id="service_price" placeholder="price" type="number" step="0.01" value="0"></div>
         <div><select id="service_staff"></select></div>
         <div><select id="service_payment"><option>Cash</option><option>Card</option></select></div>
         <div class="row" style="margin-top:8px">
@@ -101,8 +105,9 @@
       <div class="card">
         <h3>Sell</h3>
         <div><select id="sell_product" onchange="updateSellPrice()"></select></div>
-        <div><input id="sell_qty" type="number" value="1" min="1" onchange="updateSellPrice()"></div>
-        <div><input id="sell_price" type="number" step="0.01" placeholder="Price" readonly></div>
+  <div><input id="sell_qty" type="number" value="1" min="1" onchange="updateSellPrice()"></div>
+  <div><input id="sell_unit_price" type="number" step="0.01" placeholder="Unit price" onchange="updateSellPrice()"></div>
+  <div><input id="sell_price" type="number" step="0.01" placeholder="Total price" readonly></div>
         <div><select id="sell_staff"></select></div>
         <div><select id="sell_payment"><option>Cash</option><option>Card</option></select></div>
         <div class="row" style="margin-top:8px">
@@ -122,6 +127,7 @@
           <button onclick="monthlyStaffReport()">Monthly Staff Commission</button>
           <button onclick="monthlySalonReport()">Monthly Salon Profit</button>
           <button onclick="printMonthlySalonReport()" style="background:#222">Print Salon Profit</button>
+          <button onclick="printFullMonthlySalonProfit()" style="background:#444">Print Full Monthly Profit</button>
           <button onclick="printMonthlyStaffCommission()" style="background:#222">Print Staff Commission</button>
           <button onclick="exportCurrentReportPDF()">Print / Export PDF</button>
           <button onclick="ipcExportCSV('transactions')" style="background:#666">Export CSV</button>
