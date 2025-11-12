@@ -1,5 +1,24 @@
 const { ipcRenderer } = require('electron');
-let DB = { users: [], staff: [], products: [], transactions: [], salaryHistory: [] };
+let DB = { users: [], staff: [], products: [], transactions: [], salaryHistory: [], expenses: [] };
+let editingExpense = null;
+
+// ensure expenses array exists on load
+if(!DB.expenses) DB.expenses = [];
+
+// Respond to main process request to prepare for app exit.
+// This gives the renderer a chance to flush any in-memory DB changes to disk
+// and notify the main process when done.
+ipcRenderer.on('prepare-app-exit', async () => {
+  try {
+    console.log('Main requested app exit — saving data...');
+    await saveDB();
+  } catch (err) {
+    console.error('Error saving DB on prepare-app-exit:', err);
+  } finally {
+    // Notify main that we're ready to quit (always send so app doesn't hang)
+    try { ipcRenderer.send('app-ready-to-quit'); } catch (e) { console.error('Failed to notify main about ready-to-quit', e); }
+  }
+});
 
 // load DB from main
 async function loadDB(){
@@ -16,7 +35,8 @@ async function loadDB(){
       staff: db.staff || [],
       products: db.products || [],
       transactions: db.transactions || [],
-      salaryHistory: db.salaryHistory || []
+      salaryHistory: db.salaryHistory || [],
+      expenses: db.expenses || []
     };
     
     console.log('Data loaded successfully:', {
@@ -59,7 +79,8 @@ async function saveDB(){
         stock: Number(p.stock) || 0
       })),
       transactions: DB.transactions || [],
-      salaryHistory: DB.salaryHistory || []
+      salaryHistory: DB.salaryHistory || [],
+      expenses: DB.expenses || []
     };
 
     const result = await ipcRenderer.invoke('db-write', dataToSave);
@@ -285,8 +306,8 @@ function sellProduct(){
     const s = DB.staff.find(x=>x.id===staffID);
     if(s){
       staffName = s.name;
-      // Use staff-specific percent if configured (>0), otherwise default PRODUCT_STAFF_PERCENT
-      const percent = (parseFloat(s.percent) > 0) ? parseFloat(s.percent) : PRODUCT_STAFF_PERCENT;
+      // For product sales staff commission is fixed at PRODUCT_STAFF_PERCENT (5%)
+      const percent = PRODUCT_STAFF_PERCENT;
       staffEarn = total * (percent / 100);
       s.daily = (s.daily || 0) + staffEarn;
       s.monthly = (s.monthly || 0) + staffEarn;
@@ -342,12 +363,81 @@ function paySalary(){
   if(!s) return alert('Staff not found');
   const amount = s.monthly || 0;
   if(amount <= 0) return alert('No monthly commission to pay');
-  const rec = { id: genId('SAL'), staffID: s.id, staffName: s.name, amount, datetime: new Date().toISOString(), year: new Date().getFullYear(), month: new Date().getMonth() + 1 };
+  // Move both daily and monthly into yearly aggregate when paying salary
+  const daily = Number(s.daily || 0);
+  const monthly = Number(s.monthly || 0);
+  const moveTotal = daily + monthly;
+
+  // Create a salary record with details for auditing
+  const rec = {
+    id: genId('SAL'),
+    staffID: s.id,
+    staffName: s.name,
+    amountPaid: monthly,         // what is being paid now (monthly)
+    movedDaily: daily,           // moved from daily into yearly
+    movedMonthly: monthly,       // moved from monthly into yearly
+    movedTotal: moveTotal,
+    datetime: new Date().toISOString(),
+    year: new Date().getFullYear(),
+    month: new Date().getMonth() + 1
+  };
   DB.salaryHistory.push(rec);
+
+  // Update staff aggregates: add movedTotal to yearly and reset daily/monthly
+  s.yearly = (Number(s.yearly) || 0) + moveTotal;
   s.monthly = 0;
+  s.daily = 0;
+
+  // Persist and notify
   saveDB();
-  alert(`Salary ${amount.toFixed(2)} paid to ${s.name}`);
+  alert(`Salary ${monthly.toFixed(2)} paid to ${s.name}. Moved ${moveTotal.toFixed(2)} into yearly.`);
   renderAll();
+}
+
+// ---------------- EXPENSES CRUD ----------------
+function clearExpenseForm(){
+  const t = document.getElementById('exp_title'); if(t) t.value='';
+  const a = document.getElementById('exp_amount'); if(a) a.value='0';
+  const d = document.getElementById('exp_date'); if(d) d.value='';
+  const p = document.getElementById('exp_payment'); if(p) p.value='Cash';
+  editingExpense = null;
+}
+
+function onExpenseAddOrUpdate(){
+  const title = document.getElementById('exp_title').value.trim();
+  const amount = parseFloat(document.getElementById('exp_amount').value) || 0;
+  const date = document.getElementById('exp_date').value || new Date().toISOString().slice(0,10);
+  const payment = document.getElementById('exp_payment').value || 'Cash';
+  if(!title) return alert('Enter expense title');
+  if(amount <= 0) return alert('Enter amount > 0');
+
+  if(editingExpense){
+    const ex = DB.expenses.find(x=>x.id===editingExpense);
+    if(!ex) return;
+    ex.title = title; ex.amount = amount; ex.date = date; ex.payment = payment;
+    alert('Expense updated');
+  } else {
+    const rec = { id: genId('EXP'), title, amount, date, payment };
+    DB.expenses.push(rec);
+    alert('Expense added');
+  }
+  saveDB(); renderAll(); clearExpenseForm();
+}
+
+function editExpense(id){
+  const ex = DB.expenses.find(x=>x.id===id);
+  if(!ex) return;
+  document.getElementById('exp_title').value = ex.title;
+  document.getElementById('exp_amount').value = ex.amount;
+  document.getElementById('exp_date').value = ex.date ? ex.date.slice(0,10) : '';
+  document.getElementById('exp_payment').value = ex.payment || 'Cash';
+  editingExpense = id;
+}
+
+function deleteExpense(id){
+  if(!confirm('Delete expense?')) return;
+  DB.expenses = DB.expenses.filter(x=>x.id!==id);
+  saveDB(); renderAll();
 }
 
 // ---------------- SERVICES UI helpers ----------------
@@ -357,6 +447,42 @@ function clearServiceForm(){
   const pr = document.getElementById('service_price'); if(pr) pr.value='0';
   const st = document.getElementById('service_staff'); if(st) st.value='';
   const pay = document.getElementById('service_payment'); if(pay) pay.value='Cash';
+}
+
+// Clear the Quick Sell Service form
+function clearQuickServiceForm(){
+  const el = document.getElementById('qs_service_name'); if(el) el.value='';
+  const sec = document.getElementById('qs_service_section'); if(sec) sec.value='MANICURE';
+  const pr = document.getElementById('qs_service_price'); if(pr) pr.value='100';
+  const st = document.getElementById('qs_service_staff'); if(st) st.value='';
+  const pay = document.getElementById('qs_service_payment'); if(pay) pay.value='Cash';
+}
+
+// Handler for Quick Sell Service card
+function sellQuickServiceUI(){
+  const rawName = document.getElementById('qs_service_name').value.trim();
+  const section = document.getElementById('qs_service_section').value;
+  const price = parseFloat(document.getElementById('qs_service_price').value) || 0;
+  const staffID = document.getElementById('qs_service_staff').value;
+  const payment = document.getElementById('qs_service_payment').value;
+  if(!rawName) return alert('Enter service name');
+  if(price <= 0) return alert('Enter valid price');
+
+  // If staff selected, ensure they can perform the service section
+  if(staffID){
+    const s = DB.staff.find(x=>x.id===staffID);
+    if(s && s.section){
+      const secs = Array.isArray(s.section) ? s.section.map(x=>x.toUpperCase()) : [(s.section||'').toUpperCase()];
+      if(!secs.includes((section||'').toUpperCase())){
+        return alert(`Selected staff (${s.name}) cannot perform service in section ${section}.`);
+      }
+    }
+  }
+
+  sellService(rawName, section, price, staffID, payment);
+  clearQuickServiceForm();
+  renderAll();
+  alert('Service recorded');
 }
 
 function sellServiceUI(){
@@ -420,7 +546,20 @@ function monthlySalonReport(){
   const now = new Date();
   const monthlyTx = DB.transactions.filter(t=>{ const d = new Date(t.date); return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear(); });
   const salonTotal = monthlyTx.reduce((acc,t)=>acc + (t.salonEarn || 0), 0);
-  document.getElementById('reportArea').innerHTML = `<h4>Monthly Salon Profit</h4><p>Total Salon Profit: ${salonTotal.toFixed(2)}</p>` + renderTransactions(t=>{ const d=new Date(t.date); return d.getMonth()===now.getMonth() && d.getFullYear()===now.getFullYear(); });
+  // subtract monthly expenses
+  const monthlyExpenses = (DB.expenses || []).filter(e=>{ const d = new Date(e.date); return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear(); });
+  const expenseTotal = monthlyExpenses.reduce((acc,e)=>acc + (Number(e.amount)||0), 0);
+  const netSalon = salonTotal - expenseTotal;
+  
+  // Salary history summary
+  const monthlySalaryHistory = (DB.salaryHistory || []).filter(sh=>{ const d = new Date(sh.datetime); return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear(); });
+  let salaryNote = '';
+  if(monthlySalaryHistory.length){
+    const totalMoved = monthlySalaryHistory.reduce((acc,sh)=>acc + (sh.movedTotal||0), 0);
+    salaryNote = `<p style="color:#ff7f50;font-size:12px"><strong>Note:</strong> ${monthlySalaryHistory.length} salary payment(s) processed. Total Daily+Monthly moved to Yearly: ${totalMoved.toFixed(2)}</p>`;
+  }
+  
+  document.getElementById('reportArea').innerHTML = `<h4>Monthly Salon Profit</h4><p>Total Salon Profit (before expenses): ${salonTotal.toFixed(2)}</p><p>Expenses: ${expenseTotal.toFixed(2)}</p><p><strong>Net Salon Profit: ${netSalon.toFixed(2)}</strong></p>${salaryNote}` + renderTransactions(t=>{ const d=new Date(t.date); return d.getMonth()===now.getMonth() && d.getFullYear()===now.getFullYear(); });
 }
 
 // Print/save current Monthly Salon Profit report
@@ -446,13 +585,20 @@ async function printFullMonthlySalonProfit(){
   const totalStaff = monthlyTx.reduce((acc,t)=>acc + (t.staffEarn||0), 0);
   const totalSalon = monthlyTx.reduce((acc,t)=>acc + (t.salonEarn||0), 0);
 
+  // include monthly expenses
+  const monthlyExpenses = (DB.expenses || []).filter(e=>{ const d = new Date(e.date); return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear(); });
+  const totalExpenses = monthlyExpenses.reduce((acc,e)=>acc + (Number(e.amount)||0), 0);
+  const netSalon = totalSalon - totalExpenses;
+
   let lines = [];
   lines.push('Monthly Salon Profit Report (Detailed)');
   lines.push(`Month: ${now.getMonth()+1}/${now.getFullYear()}`);
   lines.push('');
   lines.push(`Total Revenue: ${totalRevenue.toFixed(2)}`);
   lines.push(`Total Staff Earn: ${totalStaff.toFixed(2)}`);
-  lines.push(`Total Salon Earn: ${totalSalon.toFixed(2)}`);
+  lines.push(`Total Salon Earn (before expenses): ${totalSalon.toFixed(2)}`);
+  lines.push(`Total Expenses: ${totalExpenses.toFixed(2)}`);
+  lines.push(`Net Salon Earn (after expenses): ${netSalon.toFixed(2)}`);
   lines.push('');
   lines.push('Transactions:');
   lines.push('ID | Date | Item | Qty | Total | Staff | StaffEarn | SalonEarn | Payment');
@@ -460,6 +606,30 @@ async function printFullMonthlySalonProfit(){
     const date = new Date(t.date).toLocaleString();
     lines.push(`${t.id} | ${date} | ${t.productName} | ${t.qty} | ${ (t.total||0).toFixed(2) } | ${t.staffName||''} | ${ (t.staffEarn||0).toFixed(2) } | ${ (t.salonEarn||0).toFixed(2) } | ${t.payment||''}`);
   });
+
+  if(monthlyExpenses.length){
+    lines.push('');
+    lines.push('Expenses:');
+    lines.push('ID | Date | Title | Amount | Payment');
+    monthlyExpenses.forEach(e=>{
+      const date = new Date(e.date).toLocaleString();
+      lines.push(`${e.id} | ${date} | ${e.title} | ${ (e.amount||0).toFixed(2) } | ${e.payment||''}`);
+    });
+  }
+
+  // Salary History: show staff daily/monthly moved to yearly
+  const monthlySalaryHistory = (DB.salaryHistory || []).filter(sh=>{ const d = new Date(sh.datetime); return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear(); });
+  if(monthlySalaryHistory.length){
+    lines.push('');
+    lines.push('Salary Payments (Daily & Monthly moved to Yearly):');
+    lines.push('Staff Name | Moved Daily | Moved Monthly | Moved Total | Amount Paid | Date');
+    monthlySalaryHistory.forEach(sh=>{
+      const date = new Date(sh.datetime).toLocaleString();
+      lines.push(`${sh.staffName} | ${ (sh.movedDaily||0).toFixed(2) } | ${ (sh.movedMonthly||0).toFixed(2) } | ${ (sh.movedTotal||0).toFixed(2) } | ${ (sh.amountPaid||0).toFixed(2) } | ${date}`);
+    });
+    lines.push('');
+    lines.push('Note: After salary payment, staff Daily and Monthly are reset to 0.00 and moved to Yearly aggregate.');
+  }
 
   const content = lines.join('\n');
   const filename = `salon_full_month_profit_${now.getFullYear()}_${String(now.getMonth()+1).padStart(2,'0')}.txt`;
@@ -524,6 +694,10 @@ function renderAll(){
   const ssv = document.getElementById('service_staff');
   if(ssv) ssv.innerHTML = '<option value="">-- none --</option>' + DB.staff.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
 
+  // quick service staff select (if present)
+  const qss = document.getElementById('qs_service_staff');
+  if(qss) qss.innerHTML = '<option value="">-- none --</option>' + DB.staff.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
+
   // pay staff select
   const paySel = document.getElementById('pay_staff');
   paySel.innerHTML = '<option value="">-- select --</option>' + DB.staff.map(s=>`<option value="${s.id}">${s.name} — ${ (s.monthly||0).toFixed(2) }</option>`).join('');
@@ -543,6 +717,31 @@ function renderAll(){
       const lastS = services.slice(-8).reverse();
       rst.innerHTML = '<ul>' + lastS.map(t=>`<li>${new Date(t.date).toLocaleString()} — ${t.productName} = ${t.total.toFixed(2)} ${t.staffName ? '| staff: '+t.staffName : ''}</li>`).join('') + '</ul>';
     }
+  }
+
+  // expenses table
+  const et = document.getElementById('expensesTable');
+  if(et){
+    et.innerHTML = (DB.expenses && DB.expenses.length) ? '<table><thead><tr><th>ID</th><th>Title</th><th>Amount</th><th>Date</th><th>Payment</th><th>Actions</th></tr></thead><tbody>' +
+      DB.expenses.map(e=>`<tr><td>${e.id}</td><td>${e.title}</td><td>${(Number(e.amount)||0).toFixed(2)}</td><td>${e.date ? e.date.slice(0,10) : ''}</td><td>${e.payment||''}</td><td><button onclick="editExpense('${e.id}')">Edit</button> <button onclick="deleteExpense('${e.id}')">Remove</button></td></tr>`).join('') +
+      '</tbody></table>' : '<small>No expenses</small>';
+  }
+
+  // Salon overview: totals and net profit (dynamic)
+  try {
+    const totalSalon = (DB.transactions || []).reduce((acc, t) => acc + (Number(t.salonEarn) || 0), 0);
+    const totalExpenses = (DB.expenses || []).reduce((acc, e) => acc + (Number(e.amount) || 0), 0);
+    const netSalon = totalSalon - totalExpenses;
+    const ovTotal = document.getElementById('ov_totalSalon'); if(ovTotal) ovTotal.textContent = totalSalon.toFixed(2);
+    const ovExp = document.getElementById('ov_totalExpenses'); if(ovExp) ovExp.textContent = totalExpenses.toFixed(2);
+    const ovNet = document.getElementById('ov_netSalon');
+    if(ovNet) {
+      ovNet.textContent = netSalon.toFixed(2);
+      // Color code: green for profit, red for loss
+      ovNet.style.color = netSalon >= 0 ? '#28a745' : '#d9534f';
+    }
+  } catch (err) {
+    console.error('Error computing salon overview:', err);
   }
 
   // save DB changes

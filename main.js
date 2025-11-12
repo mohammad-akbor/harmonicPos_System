@@ -10,7 +10,8 @@ const DEFAULT_DB = {
   staff: [],
   products: [],
   transactions: [],
-  salaryHistory: []
+  salaryHistory: [],
+  expenses: []
 };
 
 async function ensureData(){
@@ -130,3 +131,40 @@ ipcMain.handle('save-file', async (event, { filename, content }) => {
 });
 
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+
+// Ensure renderer has a chance to flush data before the app fully quits.
+// We ask renderer to save and wait for a response (with a timeout fallback).
+app.on('before-quit', (e) => {
+  // If there are no windows, just quit
+  const wins = BrowserWindow.getAllWindows();
+  if (!wins || wins.length === 0) return;
+
+  // Prevent default quit; we'll call app.quit() after save ack or timeout
+  e.preventDefault();
+  const win = wins[0];
+
+  // Send a message to renderer to prepare for exit (save DB)
+  try {
+    win.webContents.send('prepare-app-exit');
+  } catch (err) {
+    console.error('Error sending prepare-app-exit to renderer:', err);
+  }
+
+  // Wait for a reply from renderer (ipcMain.once) or fallback after 3s
+  let finished = false;
+  const timer = setTimeout(() => {
+    if (!finished) {
+      console.warn('Timed out waiting for renderer to save — quitting anyway');
+      finished = true;
+      app.quit();
+    }
+  }, 3000);
+
+  ipcMain.once('app-ready-to-quit', () => {
+    if (finished) return;
+    finished = true;
+    clearTimeout(timer);
+    // Now exit
+    app.quit();
+  });
+});
