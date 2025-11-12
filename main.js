@@ -6,7 +6,7 @@ const { Parser } = require('json2csv');
 const DATA_FILE = path.join(__dirname, 'data.json');
 
 const DEFAULT_DB = {
-  users: [{ username: 'HARMONICSALON', password: 'harmonic4', role: 'admin' }],
+  users: [{ username: '' password: '', role: 'admin' }],
   staff: [],
   products: [],
   transactions: [],
